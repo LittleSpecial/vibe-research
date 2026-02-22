@@ -803,8 +803,8 @@ INDEX_HTML = """<!doctype html>
           <div>
             <label>Run Filter</label>
             <select id="runFilterInput">
-              <option value="all" selected>show all</option>
-              <option value="hide_stale">hide stale</option>
+              <option value="all">show all</option>
+              <option value="hide_stale" selected>hide stale</option>
             </select>
           </div>
         </div>
