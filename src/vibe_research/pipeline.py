@@ -39,7 +39,7 @@ class ResearchCycleRunner:
         topic: str,
         dry_run: bool = False,
         interactive: bool = False,
-        agent_count: int = 3,
+        agent_count: int = 4,
         feedback_timeout: int = 0,
     ) -> Path:
         max_gpu_hours = float(self.settings.research.get("max_gpu_hours_per_run", 12))
@@ -218,13 +218,7 @@ class ResearchCycleRunner:
         agent_count: int,
         max_gpu_hours: float,
     ) -> list[tuple[str, str]]:
-        roles = [
-            ("novelty_agent", "Focus on novelty and publishability."),
-            ("feasibility_agent", "Focus on whether this can be executed on 4xA100 within the time budget."),
-            ("risk_agent", "Focus on failure modes, confounders, and reproducibility risks."),
-            ("baseline_agent", "Focus on strong baselines and ablations needed for top-tier review."),
-            ("efficiency_agent", "Focus on compute-efficient experiment design and staged validation."),
-        ]
+        roles = self._agent_roles()
         selected = roles[: max(1, min(agent_count, len(roles)))]
 
         ideation_prompt = _read_prompt(self.repo_root / "prompts" / "ideation.md")
@@ -254,6 +248,42 @@ class ResearchCycleRunner:
             self._append_progress(run_dir, f"agent note completed: {role_name}")
 
         return notes
+
+    def _agent_roles(self) -> list[tuple[str, str]]:
+        fallback = [
+            (
+                "pi_vision_agent",
+                "Propose a high-upside core hypothesis and contribution framing that could survive top-tier review.",
+            ),
+            (
+                "methodology_agent",
+                "Design technically rigorous RL/LLM methods and identify the key implementation details.",
+            ),
+            (
+                "experiment_engineer_agent",
+                "Build an execution-first plan with strong baselines/ablations that fits 4xA100 constraints.",
+            ),
+            (
+                "reviewer_redteam_agent",
+                "Act like a strict reviewer: expose weaknesses, confounders, missing controls, and ways to falsify the claim.",
+            ),
+        ]
+
+        cfg = self.settings.agents
+        raw_roles = cfg.get("roles", [])
+        if not isinstance(raw_roles, list) or not raw_roles:
+            return fallback
+
+        roles: list[tuple[str, str]] = []
+        for i, item in enumerate(raw_roles, start=1):
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", f"agent_{i}")).strip() or f"agent_{i}"
+            goal = str(item.get("goal", "")).strip()
+            if goal:
+                roles.append((name, goal))
+
+        return roles or fallback
 
     def _generate_idea(
         self,

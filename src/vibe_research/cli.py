@@ -15,13 +15,16 @@ def cmd_run_cycle(args: argparse.Namespace) -> int:
     repo_root = Path(__file__).resolve().parents[2]
     settings = load_settings(args.config)
     topic = args.topic or settings.research.get("default_topic", "rl+llm")
+    agent_count = args.agent_count
+    if agent_count <= 0:
+        agent_count = int(settings.agents.get("default_count", 4))
 
     runner = ResearchCycleRunner(repo_root=repo_root, settings=settings)
     run_dir = runner.run_cycle(
         topic=topic,
         dry_run=args.dry_run,
         interactive=args.interactive,
-        agent_count=args.agent_count,
+        agent_count=agent_count,
         feedback_timeout=args.feedback_timeout,
     )
     print(run_dir)
@@ -99,7 +102,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_cycle.add_argument("--topic", default="")
     p_cycle.add_argument("--dry-run", action="store_true")
     p_cycle.add_argument("--interactive", action="store_true", help="pause after each stage for human approve/revise")
-    p_cycle.add_argument("--agent-count", type=int, default=3, help="number of ideation agents (1-5)")
+    p_cycle.add_argument("--agent-count", type=int, default=0, help="number of ideation agents (0=use config)")
     p_cycle.add_argument(
         "--feedback-timeout",
         type=int,

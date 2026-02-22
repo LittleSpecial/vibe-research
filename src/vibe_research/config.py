@@ -25,6 +25,10 @@ class Settings:
     def remote(self) -> dict:
         return self.raw.get("remote", {})
 
+    @property
+    def agents(self) -> dict:
+        return self.raw.get("agents", {})
+
     def provider(self) -> dict:
         key = self.model.get("model_provider")
         providers = self.raw.get("model_providers", {})

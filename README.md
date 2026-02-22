@@ -9,7 +9,7 @@ Minimal `idea -> plan -> implementation -> remote run` pipeline for RL + LLM res
   - `max_gpu_hours_per_run = 12` (wall-clock)
   - max GPUs per job = `8` (default submission uses `4`)
 - Multi-agent ideation:
-  - default 3 agents: novelty / feasibility / risk
+  - default 4 agents: `pi_vision_agent` / `methodology_agent` / `experiment_engineer_agent` / `reviewer_redteam_agent`
 - Real-time observability:
   - `runs/<RUN_ID>/status.json`
   - `runs/<RUN_ID>/progress.log`
@@ -20,12 +20,12 @@ cd /Users/zhaoxu/Developer/projects/vibe-research
 ./scripts/bootstrap_local.sh
 source .venv/bin/activate
 
-# 1) Generate one full research cycle locally (non-interactive)
-vibe-research run-cycle --topic "RL + LLM topic"
+# 1) Start one full research cycle in background (interactive by default)
+./scripts/start_cycle.sh configs/local.toml "RL + LLM topic" interactive 0 0
 
 # 2) Find latest run and watch status
 RUN_ID=$(cat runs/LATEST_RUN)
-./scripts/watch_local_run.sh "$RUN_ID"
+./scripts/monitor_local_fars.sh "$RUN_ID"
 
 # 3) Sync code + generated run to remote
 ./scripts/sync_to_zw1.sh zw1 vibe-research
@@ -36,8 +36,8 @@ RUN_ID=$(cat runs/LATEST_RUN)
 # 5) Submit remote job (4 GPUs, 12h)
 ./scripts/submit_remote.sh zw1 vibe-research "$RUN_ID" 4 12
 
-# 6) Watch remote status/logs
-./scripts/watch_remote_run.sh zw1 vibe-research "$RUN_ID"
+# 6) FARS-style remote monitor (status + slurm + logs)
+./scripts/monitor_remote_fars.sh zw1 vibe-research "$RUN_ID"
 ./scripts/tail_remote_logs.sh zw1 vibe-research
 ```
 

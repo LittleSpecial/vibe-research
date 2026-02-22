@@ -16,5 +16,25 @@ if [[ "$GPUS" -gt 8 ]]; then
 fi
 
 ZX_SSH_SCRIPT="${ZX_SSH_SCRIPT:-$HOME/.codex/skills/paracloud-zx-ssh-workflow/scripts/ssh_zx.sh}"
-CMD="mkdir -p logs && sbatch --gpus=${GPUS} --time=${HOURS}:00:00 remote/slurm_run_experiment.sh runs/${RUN_ID}"
-"$ZX_SSH_SCRIPT" "$HOST" --repo "$REMOTE_REPO" "$CMD"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+RUN_DIR_LOCAL="$ROOT/runs/$RUN_ID"
+mkdir -p "$RUN_DIR_LOCAL"
+
+CMD="mkdir -p logs runs/${RUN_ID} && sbatch --gpus=${GPUS} --time=${HOURS}:00:00 remote/slurm_run_experiment.sh runs/${RUN_ID}"
+OUT="$("$ZX_SSH_SCRIPT" "$HOST" --repo "$REMOTE_REPO" "$CMD")"
+echo "$OUT"
+
+JOB_ID="$(echo "$OUT" | rg -o '[0-9]+' | tail -n 1 || true)"
+if [[ -n "$JOB_ID" ]]; then
+  cat > "$RUN_DIR_LOCAL/remote_submit.json" <<EOF
+{
+  "host": "$HOST",
+  "remote_repo": "$REMOTE_REPO",
+  "run_id": "$RUN_ID",
+  "job_id": "$JOB_ID",
+  "gpus": $GPUS,
+  "hours": $HOURS
+}
+EOF
+  echo "Recorded remote_submit.json with job_id=$JOB_ID at $RUN_DIR_LOCAL/remote_submit.json"
+fi

@@ -10,6 +10,25 @@ remote_root = "~/zx"
 default_gpus = 4
 max_gpus = 8
 
+[agents]
+default_count = 4
+
+[[agents.roles]]
+name = "pi_vision_agent"
+goal = "Propose a high-upside core hypothesis and contribution framing that could survive top-tier review."
+
+[[agents.roles]]
+name = "methodology_agent"
+goal = "Design technically rigorous RL/LLM methods and identify key implementation details and assumptions."
+
+[[agents.roles]]
+name = "experiment_engineer_agent"
+goal = "Build an execution-first plan with strong baselines/ablations that fits 4xA100 constraints."
+
+[[agents.roles]]
+name = "reviewer_redteam_agent"
+goal = "Act like a strict reviewer: expose weaknesses, confounders, missing controls, and falsification tests."
+
 [model]
 model = "gpt-5.3-codex"
 model_reasoning_effort = "xhigh"
