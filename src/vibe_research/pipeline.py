@@ -75,6 +75,8 @@ class ResearchCycleRunner:
             total_steps=total_steps,
             message="initialized run directory",
         )
+        project_dir = self._init_project_layout(run_id=run_id, topic=topic, run_dir=run_dir)
+        self._sync_project_artifacts(run_dir=run_dir, project_dir=project_dir, run_id=run_id, topic=topic)
 
         if dry_run:
             (run_dir / "DRY_RUN.txt").write_text("dry run only\n", encoding="utf-8")
@@ -88,6 +90,7 @@ class ResearchCycleRunner:
                 total_steps=total_steps,
                 message="dry-run completed",
             )
+            self._sync_project_artifacts(run_dir=run_dir, project_dir=project_dir, run_id=run_id, topic=topic)
             return run_dir
 
         try:
@@ -128,6 +131,7 @@ class ResearchCycleRunner:
                     papers=top_papers,
                     run_id=run_id,
                 )
+                self._sync_project_artifacts(run_dir=run_dir, project_dir=project_dir, run_id=run_id, topic=topic)
 
             debate_notes: list[tuple[str, str]] = []
             if agent_count > 1:
@@ -151,6 +155,7 @@ class ResearchCycleRunner:
                     literature_context=literature_context,
                 )
                 self._append_progress(run_dir, f"generated {len(debate_notes)} agent notes")
+                self._sync_project_artifacts(run_dir=run_dir, project_dir=project_dir, run_id=run_id, topic=topic)
 
             current_step += 1
             self._write_status(
@@ -179,6 +184,7 @@ class ResearchCycleRunner:
                 ),
                 output_path=run_dir / "idea.md",
             )
+            self._sync_project_artifacts(run_dir=run_dir, project_dir=project_dir, run_id=run_id, topic=topic)
 
             current_step += 1
             self._write_status(
@@ -211,6 +217,7 @@ class ResearchCycleRunner:
             (run_dir / "plan.json").write_text(
                 json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8"
             )
+            self._sync_project_artifacts(run_dir=run_dir, project_dir=project_dir, run_id=run_id, topic=topic)
 
             current_step += 1
             self._write_status(
@@ -246,6 +253,7 @@ class ResearchCycleRunner:
                 "max_gpu_hours_per_run": max_gpu_hours,
                 "max_gpu_cards_per_run": max_gpus,
                 "max_api_usd_per_day": float(self.settings.research.get("max_api_usd_per_day", 0)),
+                "project_dir": f"projects/{run_id}",
                 "status": "planned",
                 "created_at": datetime.now().isoformat(),
             }
@@ -263,6 +271,7 @@ class ResearchCycleRunner:
                 total_steps=total_steps,
                 message="idea/plan/implementation generated",
             )
+            self._sync_project_artifacts(run_dir=run_dir, project_dir=project_dir, run_id=run_id, topic=topic)
             return run_dir
         except Exception as e:
             self._write_status(
@@ -275,6 +284,7 @@ class ResearchCycleRunner:
                 total_steps=total_steps,
                 message=str(e),
             )
+            self._sync_project_artifacts(run_dir=run_dir, project_dir=project_dir, run_id=run_id, topic=topic)
             raise
 
     def _run_agent_debate(
@@ -763,6 +773,91 @@ class ResearchCycleRunner:
     def _daily_usage_path(self) -> Path:
         day = datetime.now().strftime("%Y-%m-%d")
         return self.repo_root / "runs" / ".budget" / f"{day}.json"
+
+    def _init_project_layout(self, run_id: str, topic: str, run_dir: Path) -> Path:
+        project_dir = self.repo_root / "projects" / run_id
+        (project_dir / "exp").mkdir(parents=True, exist_ok=True)
+        (project_dir / "idea").mkdir(parents=True, exist_ok=True)
+        (project_dir / "writing").mkdir(parents=True, exist_ok=True)
+        (project_dir / "FARS_MEMO").mkdir(parents=True, exist_ok=True)
+        (project_dir / "EXPERIMENT_RESULTS").mkdir(parents=True, exist_ok=True)
+
+        readme = project_dir / "README.md"
+        if not readme.exists():
+            readme.write_text(
+                (
+                    f"# {run_id}\n\n"
+                    f"- topic: {topic}\n"
+                    f"- created_at: {datetime.now().isoformat()}\n"
+                    f"- run_dir: runs/{run_id}\n"
+                ),
+                encoding="utf-8",
+            )
+
+        run_ptr = project_dir / "RUN_DIR"
+        run_ptr.write_text(f"runs/{run_id}\n", encoding="utf-8")
+
+        memo = project_dir / "FARS_MEMO" / "notes.md"
+        if not memo.exists():
+            memo.write_text("# Notes\n\n", encoding="utf-8")
+
+        self._copy_if_exists(run_dir / "status.json", project_dir / "EXPERIMENT_RESULTS" / "status.json")
+        return project_dir
+
+    def _sync_project_artifacts(self, run_dir: Path, project_dir: Path, run_id: str, topic: str) -> None:
+        idea_dir = project_dir / "idea"
+        exp_dir = project_dir / "exp"
+        memo_dir = project_dir / "FARS_MEMO"
+        results_dir = project_dir / "EXPERIMENT_RESULTS"
+        literature_dir = idea_dir / "literature"
+        agents_dir = idea_dir / "agents"
+
+        self._copy_if_exists(run_dir / "status.json", results_dir / "status.json")
+        self._copy_if_exists(run_dir / "progress.log", results_dir / "progress.log")
+        self._copy_if_exists(run_dir / "meta.json", results_dir / "meta.json")
+        self._copy_if_exists(run_dir / "api_usage.json", results_dir / "api_usage.json")
+
+        self._copy_if_exists(run_dir / "idea.md", idea_dir / "idea.md")
+        self._copy_if_exists(run_dir / "plan.raw.txt", exp_dir / "plan.raw.txt")
+        self._copy_if_exists(run_dir / "plan.json", exp_dir / "plan.json")
+        self._copy_if_exists(run_dir / "plan.json", project_dir / "task_plan.json")
+        self._copy_if_exists(run_dir / "implementation.md", exp_dir / "implementation.md")
+        self._copy_if_exists(run_dir / "experiment.sh", exp_dir / "experiment.sh", executable=True)
+
+        self._copy_if_exists(run_dir / "literature" / "review.md", literature_dir / "review.md")
+        self._copy_if_exists(run_dir / "literature" / "digest.md", literature_dir / "digest.md")
+        self._copy_if_exists(run_dir / "literature" / "papers.json", literature_dir / "papers.json")
+
+        agents_src = run_dir / "agents"
+        if agents_src.exists() and agents_src.is_dir():
+            for p in sorted(agents_src.glob("*.md")):
+                self._copy_if_exists(p, agents_dir / p.name)
+
+        feedback_src = run_dir / "feedback"
+        if feedback_src.exists() and feedback_src.is_dir():
+            for p in sorted(feedback_src.glob("*.md")):
+                self._copy_if_exists(p, memo_dir / "feedback" / p.name)
+
+        manifest = {
+            "run_id": run_id,
+            "topic": topic,
+            "project_dir": f"projects/{run_id}",
+            "run_dir": f"runs/{run_id}",
+            "synced_at": datetime.now().isoformat(),
+        }
+        (project_dir / "project_meta.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _copy_if_exists(src: Path, dst: Path, executable: bool = False) -> None:
+        if not src.exists() or not src.is_file():
+            return
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        if executable:
+            dst.chmod(0o755)
 
     def _literature_sources(self) -> list[str]:
         raw = self.settings.research.get("literature_sources", "arxiv")

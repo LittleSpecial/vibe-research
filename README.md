@@ -16,6 +16,12 @@ Minimal `literature -> idea -> plan -> implementation -> remote run` pipeline fo
   - `runs/<RUN_ID>/status.json`
   - `runs/<RUN_ID>/progress.log`
   - `runs/<RUN_ID>/literature/*` (paper retrieval + review)
+- FARS-style per-idea project mirror:
+  - `projects/<RUN_ID>/exp`
+  - `projects/<RUN_ID>/idea`
+  - `projects/<RUN_ID>/writing`
+  - `projects/<RUN_ID>/FARS_MEMO`
+  - `projects/<RUN_ID>/EXPERIMENT_RESULTS`
 
 ## Quick Start
 ```bash
@@ -99,3 +105,4 @@ export OPENAI_API_KEY=...   # from your local auth bridge
 ## Notes
 - This repo avoids touching your existing running experiments in other repos.
 - Default run artifacts are under `runs/<RUN_ID>/`.
+- A synchronized subproject view is also created under `projects/<RUN_ID>/` for each idea.
