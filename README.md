@@ -20,26 +20,39 @@ cd /Users/zhaoxu/Developer/projects/vibe-research
 ./scripts/bootstrap_local.sh
 source .venv/bin/activate
 
-# 1) Start one full research cycle in background (interactive by default)
+# 1) Start FARS-style web monitor (local dashboard)
+./scripts/start_monitor_web.sh 8787 127.0.0.1 zw1 vibe-research
+# open: http://127.0.0.1:8787
+
+# 2) Start one full research cycle in background (interactive by default)
 ./scripts/start_cycle.sh configs/local.toml "RL + LLM topic" interactive 0 0
 
-# 2) Find latest run and watch status
+# 3) Find latest run and watch status in terminal
 RUN_ID=$(cat runs/LATEST_RUN)
 ./scripts/monitor_local_fars.sh "$RUN_ID"
 
-# 3) Sync code + generated run to remote
+# 4) Sync code + generated run to remote
 ./scripts/sync_to_zw1.sh zw1 vibe-research
 
-# 4) (One-time) bootstrap remote env
+# 5) (One-time) bootstrap remote env
 ./scripts/remote_bootstrap.sh zw1 vibe-research
 
-# 5) Submit remote job (4 GPUs, 12h)
+# 6) Submit remote job (4 GPUs, 12h)
 ./scripts/submit_remote.sh zw1 vibe-research "$RUN_ID" 4 12
 
-# 6) FARS-style remote monitor (status + slurm + logs)
+# 7) FARS-style remote monitor (status + slurm + logs)
 ./scripts/monitor_remote_fars.sh zw1 vibe-research "$RUN_ID"
 ./scripts/tail_remote_logs.sh zw1 vibe-research
 ```
+
+## Web Monitor
+- Start: `./scripts/start_monitor_web.sh 8787 127.0.0.1 zw1 vibe-research`
+- URL: `http://127.0.0.1:8787`
+- Features:
+  - Run list + live local status/progress.
+  - Start run-cycle directly from web UI.
+  - Submit interactive feedback (`approve` / `revise`) per stage.
+  - Pull remote status/queue/logs via SSH skill script.
 
 ## Interactive Feedback Loop
 Use interactive mode when you want to review/revise each stage.
