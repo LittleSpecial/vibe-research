@@ -56,6 +56,40 @@ def _tail_lines(path: Path, count: int = 120) -> list[str]:
     return lines[-max(1, count) :]
 
 
+def _read_text_head(path: Path, max_chars: int = 1600) -> str:
+    if not path.exists():
+        return ""
+    try:
+        txt = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    if len(txt) <= max_chars:
+        return txt
+    return txt[:max_chars] + "\n... [truncated]"
+
+
+def _collect_agent_notes(run_dir: Path, max_notes: int = 12, per_note_chars: int = 1200) -> list[dict]:
+    agents_dir = run_dir / "agents"
+    if not agents_dir.exists():
+        return []
+
+    notes: list[dict] = []
+    files = sorted([p for p in agents_dir.iterdir() if p.is_file() and p.suffix == ".md"])
+    for p in files[: max(1, max_notes)]:
+        try:
+            mtime = datetime.fromtimestamp(p.stat().st_mtime).isoformat()
+        except OSError:
+            mtime = ""
+        notes.append(
+            {
+                "name": p.name,
+                "updated_at": mtime,
+                "preview": _read_text_head(p, max_chars=per_note_chars),
+            }
+        )
+    return notes
+
+
 def _list_run_dirs(root: Path) -> list[Path]:
     runs_dir = root / "runs"
     if not runs_dir.exists():
@@ -116,6 +150,8 @@ def _run_detail(root: Path, run_id: str, tail: int) -> dict[str, Any]:
     feedback_files = []
     if feedback_dir.exists():
         feedback_files = sorted([p.name for p in feedback_dir.iterdir() if p.is_file()])
+    gate_stage = str(status.get("stage", "") or "")
+    waiting_feedback = bool(status.get("state") == "waiting_feedback" and gate_stage)
 
     return {
         "run_id": run_id,
@@ -129,6 +165,9 @@ def _run_detail(root: Path, run_id: str, tail: int) -> dict[str, Any]:
         "has_implementation": (run_dir / "implementation.md").exists(),
         "has_experiment": (run_dir / "experiment.sh").exists(),
         "feedback_files": feedback_files,
+        "waiting_feedback": waiting_feedback,
+        "feedback_stage": gate_stage if waiting_feedback else "",
+        "agent_notes": _collect_agent_notes(run_dir),
         "remote_submit": _read_json(run_dir / "remote_submit.json"),
         "remote_submit_error": _read_json(run_dir / "remote_submit_error.json"),
     }
@@ -138,14 +177,16 @@ def _latest_run_id(root: Path) -> str:
     dirs = _list_run_dirs(root)
     if dirs:
         runs = [_summarize_run(p) for p in dirs]
-        runs.sort(
+        active_runs = [r for r in runs if str(r.get("state", "")) not in {"stale_stopped"}]
+        pool = active_runs or runs
+        pool.sort(
             key=lambda x: (
                 str(x.get("updated_at", "") or ""),
                 str(x.get("run_id", "") or ""),
             ),
             reverse=True,
         )
-        top = runs[0] if runs else {}
+        top = pool[0] if pool else {}
         rid = str(top.get("run_id", "") or "")
         if rid:
             return rid
@@ -334,6 +375,74 @@ def _write_feedback(root: Path, run_id: str, stage: str, action: str, note: str)
     marker = feedback_dir / f"{stage}.{action}"
     marker.write_text(f"{datetime.now().isoformat()}\n", encoding="utf-8")
     return {"ok": True, "stage": stage, "action": action, "note_written": bool(note.strip())}
+
+
+def _mark_stale_run(root: Path, run_id: str, reason: str) -> dict[str, Any]:
+    run_dir = root / "runs" / run_id
+    status_path = run_dir / "status.json"
+    if not status_path.exists():
+        return {"run_id": run_id, "ok": False, "error": "status.json not found"}
+
+    status = _read_json(status_path)
+    prev_state = str(status.get("state", "unknown") or "unknown")
+    now = datetime.now().isoformat()
+    status["state"] = "stale_stopped"
+    status["message"] = reason
+    status["stale_from_state"] = prev_state
+    status["stale_marked_at"] = now
+    status["updated_at"] = now
+    status_path.write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    try:
+        with (run_dir / "progress.log").open("a", encoding="utf-8") as f:
+            f.write(f"{now} | stale cleanup: {reason}\n")
+    except OSError:
+        pass
+
+    return {"run_id": run_id, "ok": True, "prev_state": prev_state}
+
+
+def _cleanup_stale_runs(root: Path, threshold_seconds: int = 1800, dry_run: bool = False) -> dict[str, Any]:
+    threshold = max(60, int(threshold_seconds))
+    runs = [_summarize_run(p) for p in _list_run_dirs(root)]
+    candidates = [
+        r
+        for r in runs
+        if str(r.get("state", "")) in {"running", "waiting_feedback"}
+        and isinstance(r.get("age_seconds"), int)
+        and int(r["age_seconds"]) >= threshold
+    ]
+    # Oldest first for predictable cleanup.
+    candidates.sort(key=lambda x: int(x.get("age_seconds", 0)), reverse=True)
+
+    if dry_run:
+        return {
+            "ok": True,
+            "dry_run": True,
+            "threshold_seconds": threshold,
+            "count": len(candidates),
+            "candidates": [str(x.get("run_id", "")) for x in candidates],
+        }
+
+    updated: list[dict] = []
+    for r in candidates:
+        run_id = str(r.get("run_id", "") or "")
+        if not run_id:
+            continue
+        updated.append(
+            _mark_stale_run(
+                root,
+                run_id=run_id,
+                reason=f"marked stale by cleanup API (age >= {threshold}s)",
+            )
+        )
+    return {
+        "ok": True,
+        "dry_run": False,
+        "threshold_seconds": threshold,
+        "count": len(updated),
+        "updated": updated,
+    }
 
 
 def _start_cycle(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
@@ -618,6 +727,8 @@ INDEX_HTML = """<!doctype html>
       color: var(--muted);
       margin-top: 8px;
     }
+    .notice.warn { color: var(--warn); }
+    .notice.ok { color: var(--accent-2); }
     @media (max-width: 1120px) {
       .wrap {
         grid-template-columns: 1fr;
@@ -682,6 +793,20 @@ INDEX_HTML = """<!doctype html>
         <div class="btn-row">
           <button id="startBtn">Start Cycle</button>
           <button class="secondary" id="refreshRunsBtn">Refresh Runs</button>
+          <button class="warn" id="cleanStaleBtn">Clean Stale</button>
+        </div>
+        <div class="row">
+          <div>
+            <label>Stale Threshold (sec)</label>
+            <input id="staleThresholdInput" value="1800" />
+          </div>
+          <div>
+            <label>Run Filter</label>
+            <select id="runFilterInput">
+              <option value="all" selected>show all</option>
+              <option value="hide_stale">hide stale</option>
+            </select>
+          </div>
         </div>
         <div class="notice" id="startNotice"></div>
       </div>
@@ -690,6 +815,7 @@ INDEX_HTML = """<!doctype html>
     <section class="panel">
       <h3>Live Feedback Gate</h3>
       <div class="block">
+        <div class="notice warn" id="gateNotice">No active feedback gate.</div>
         <label>Stage</label>
         <select id="stageSelect">
           <option value="idea">idea</option>
@@ -716,6 +842,7 @@ INDEX_HTML = """<!doctype html>
             <div class="k">State</div><div class="v" id="runStateCell">-</div>
             <div class="k">Stage</div><div class="v" id="runStageCell">-</div>
             <div class="k">Step</div><div class="v" id="runStepCell">-</div>
+            <div class="k">Gate</div><div class="v" id="runGateCell">-</div>
             <div class="k">Updated</div><div class="v" id="runUpdatedCell">-</div>
             <div class="k">Message</div><div class="v" id="runMsgCell">-</div>
           </div>
@@ -723,6 +850,10 @@ INDEX_HTML = """<!doctype html>
         <div class="block">
           <div class="muted">Progress Tail</div>
           <pre id="progressBox"></pre>
+        </div>
+        <div class="block">
+          <div class="muted">Agent Debate Notes</div>
+          <pre id="agentsBox"></pre>
         </div>
       </div>
 
@@ -799,7 +930,11 @@ INDEX_HTML = """<!doctype html>
     function renderRuns() {
       const root = document.getElementById("runList");
       root.innerHTML = "";
-      for (const run of state.runs) {
+      const filter = document.getElementById("runFilterInput").value;
+      const runs = (filter === "hide_stale")
+        ? state.runs.filter(r => !r.likely_stale)
+        : state.runs;
+      for (const run of runs) {
         const div = document.createElement("div");
         div.className = "run-item" + (state.selectedRun === run.run_id ? " active" : "");
         const cls = "state-" + String(run.state || "").replace(/[\\s]+/g, "_");
@@ -823,6 +958,14 @@ INDEX_HTML = """<!doctype html>
           refreshRemote();
         };
         root.appendChild(div);
+      }
+    }
+
+    function setStageIfExists(stage) {
+      const sel = document.getElementById("stageSelect");
+      const options = Array.from(sel.options).map(o => o.value);
+      if (options.includes(stage)) {
+        sel.value = stage;
       }
     }
 
@@ -854,10 +997,33 @@ INDEX_HTML = """<!doctype html>
         setText("runStateCell", s.state);
         setText("runStageCell", s.stage);
         setText("runStepCell", `${s.step ?? "?"}/${s.total_steps ?? "?"}`);
+        setText("runGateCell", data.waiting_feedback ? data.feedback_stage : "-");
         setText("runUpdatedCell", s.updated_at);
         setText("runMsgCell", s.message);
         document.getElementById("progressBox").textContent =
           (data.progress_tail || []).join("\\n") || "(no progress yet)";
+
+        const notes = data.agent_notes || [];
+        document.getElementById("agentsBox").textContent = notes.length
+          ? notes.map(n => `### ${n.name}\\n${n.preview || "(empty)"}`).join("\\n\\n---\\n\\n")
+          : "(no agent notes yet)";
+
+        const gateNotice = document.getElementById("gateNotice");
+        const feedbackNotice = document.getElementById("feedbackNotice");
+        if (data.waiting_feedback && data.feedback_stage) {
+          setStageIfExists(data.feedback_stage);
+          gateNotice.textContent = `Waiting feedback for stage: ${data.feedback_stage}. Click Approve or Revise below.`;
+          gateNotice.className = "notice warn";
+          feedbackNotice.textContent = `Pending: ${data.feedback_stage}`;
+          feedbackNotice.className = "notice warn";
+        } else {
+          gateNotice.textContent = "No active feedback gate.";
+          gateNotice.className = "notice";
+          if (!feedbackNotice.textContent.startsWith("ok:")) {
+            feedbackNotice.textContent = "";
+            feedbackNotice.className = "notice";
+          }
+        }
       } catch (e) {
         document.getElementById("progressBox").textContent = "load run failed: " + e.message;
       }
@@ -906,6 +1072,23 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    async function cleanStaleRuns() {
+      const notice = document.getElementById("startNotice");
+      const threshold = parseInt(document.getElementById("staleThresholdInput").value.trim() || "1800", 10) || 1800;
+      notice.textContent = "cleaning stale runs...";
+      try {
+        const data = await apiPost("/api/runs/cleanup-stale", {
+          threshold_seconds: threshold,
+          dry_run: false
+        });
+        notice.textContent = `stale cleanup done: ${data.count || 0} run(s) marked stale`;
+        await refreshRuns();
+        await refreshSelectedRun();
+      } catch (e) {
+        notice.textContent = "stale cleanup failed: " + e.message;
+      }
+    }
+
     async function sendFeedback(action) {
       if (!state.selectedRun) { return; }
       const stage = document.getElementById("stageSelect").value;
@@ -917,9 +1100,11 @@ INDEX_HTML = """<!doctype html>
           stage, action, note
         });
         notice.textContent = `ok: ${data.stage}.${data.action}`;
+        notice.className = "notice ok";
         await refreshSelectedRun();
       } catch (e) {
         notice.textContent = "feedback failed: " + e.message;
+        notice.className = "notice warn";
       }
     }
 
@@ -928,6 +1113,8 @@ INDEX_HTML = """<!doctype html>
       setInterval(updateClock, 1000);
       document.getElementById("startBtn").onclick = startCycle;
       document.getElementById("refreshRunsBtn").onclick = refreshRuns;
+      document.getElementById("cleanStaleBtn").onclick = cleanStaleRuns;
+      document.getElementById("runFilterInput").onchange = renderRuns;
       document.getElementById("refreshRemoteBtn").onclick = refreshRemote;
       document.getElementById("approveBtn").onclick = () => sendFeedback("approve");
       document.getElementById("reviseBtn").onclick = () => sendFeedback("revise");
@@ -1048,6 +1235,17 @@ class MonitorHandler(BaseHTTPRequestHandler):
                 out = _start_cycle(self.repo_root, payload)
                 code = HTTPStatus.OK if out.get("ok") else HTTPStatus.INTERNAL_SERVER_ERROR
                 self._send_json(out, status=code)
+                return
+
+            if path == "/api/runs/cleanup-stale":
+                threshold_seconds = int(payload.get("threshold_seconds", 1800))
+                dry_run = bool(payload.get("dry_run", False))
+                out = _cleanup_stale_runs(
+                    self.repo_root,
+                    threshold_seconds=threshold_seconds,
+                    dry_run=dry_run,
+                )
+                self._send_json(out)
                 return
 
             m_feedback = re.fullmatch(r"/api/run/([A-Za-z0-9._-]+)/feedback", path)
