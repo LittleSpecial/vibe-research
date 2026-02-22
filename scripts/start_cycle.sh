@@ -31,7 +31,7 @@ if [[ "$MODE" == "interactive" ]]; then
   CMD+=(--interactive)
 fi
 
-"${CMD[@]}" >"$LOG_PATH" 2>&1 &
+nohup "${CMD[@]}" >"$LOG_PATH" 2>&1 </dev/null &
 PID=$!
 echo "$PID" > runs/LATEST_PID
 
