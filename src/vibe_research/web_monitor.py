@@ -36,6 +36,16 @@ def _read_json(path: Path) -> dict[str, Any]:
     return {}
 
 
+def _age_seconds(iso_ts: str) -> int | None:
+    if not iso_ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(iso_ts)
+    except ValueError:
+        return None
+    return max(0, int((datetime.now() - dt).total_seconds()))
+
+
 def _tail_lines(path: Path, count: int = 120) -> list[str]:
     if not path.exists():
         return []
@@ -66,14 +76,22 @@ def _list_run_dirs(root: Path) -> list[Path]:
 def _summarize_run(run_dir: Path) -> dict[str, Any]:
     status = _read_json(run_dir / "status.json")
     meta = _read_json(run_dir / "meta.json")
+    updated_at = str(status.get("updated_at", "") or "")
+    state = str(status.get("state", "unknown") or "unknown")
+    age_sec = _age_seconds(updated_at)
+    likely_stale = bool(
+        state in {"running", "waiting_feedback"} and age_sec is not None and age_sec >= 900
+    )
     return {
         "run_id": run_dir.name,
-        "state": status.get("state", "unknown"),
+        "state": state,
         "stage": status.get("stage", "unknown"),
         "step": status.get("step", "?"),
         "total_steps": status.get("total_steps", "?"),
         "message": status.get("message", ""),
-        "updated_at": status.get("updated_at", ""),
+        "updated_at": updated_at,
+        "age_seconds": age_sec,
+        "likely_stale": likely_stale,
         "topic": status.get("topic", meta.get("topic", "")),
     }
 
@@ -117,13 +135,27 @@ def _run_detail(root: Path, run_id: str, tail: int) -> dict[str, Any]:
 
 
 def _latest_run_id(root: Path) -> str:
+    dirs = _list_run_dirs(root)
+    if dirs:
+        runs = [_summarize_run(p) for p in dirs]
+        runs.sort(
+            key=lambda x: (
+                str(x.get("updated_at", "") or ""),
+                str(x.get("run_id", "") or ""),
+            ),
+            reverse=True,
+        )
+        top = runs[0] if runs else {}
+        rid = str(top.get("run_id", "") or "")
+        if rid:
+            return rid
+
     latest = root / "runs" / "LATEST_RUN"
     if latest.exists():
         txt = latest.read_text(encoding="utf-8", errors="replace").strip()
         if txt:
             return txt
-    dirs = _list_run_dirs(root)
-    return dirs[0].name if dirs else ""
+    return ""
 
 
 def _safe_run_id(run_id: str) -> str:
@@ -503,6 +535,7 @@ INDEX_HTML = """<!doctype html>
     .state-completed { color: var(--accent-2); }
     .state-failed { color: var(--danger); }
     .state-waiting_feedback { color: var(--warn); }
+    .state-stale { color: var(--danger); }
     .block {
       padding: 10px 12px;
       border-bottom: 1px solid rgba(116, 159, 179, 0.16);
@@ -770,14 +803,18 @@ INDEX_HTML = """<!doctype html>
         const div = document.createElement("div");
         div.className = "run-item" + (state.selectedRun === run.run_id ? " active" : "");
         const cls = "state-" + String(run.state || "").replace(/[\\s]+/g, "_");
+        const staleChip = run.likely_stale ? `<span class="chip state-stale">stale?</span>` : "";
+        const age = (run.age_seconds ?? null);
+        const ageTxt = (age === null) ? "" : ` | age=${age}s`;
         div.innerHTML = `
           <div class="run-id">${run.run_id}</div>
           <div class="chips">
             <span class="chip ${cls}">${run.state || "unknown"}</span>
             <span class="chip">${run.stage || "?"}</span>
             <span class="chip">${run.step || "?"}/${run.total_steps || "?"}</span>
+            ${staleChip}
           </div>
-          <div class="muted" style="margin-top:6px;">${run.updated_at || ""}</div>
+          <div class="muted" style="margin-top:6px;">${run.updated_at || ""}${ageTxt}</div>
         `;
         div.onclick = () => {
           state.selectedRun = run.run_id;
@@ -935,7 +972,15 @@ class MonitorHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/runs":
                 limit = int(query.get("limit", ["50"])[0])
-                runs = [_summarize_run(p) for p in _list_run_dirs(self.repo_root)[: max(1, limit)]]
+                runs_all = [_summarize_run(p) for p in _list_run_dirs(self.repo_root)]
+                runs_all.sort(
+                    key=lambda x: (
+                        str(x.get("updated_at", "") or ""),
+                        str(x.get("run_id", "") or ""),
+                    ),
+                    reverse=True,
+                )
+                runs = runs_all[: max(1, limit)]
                 self._send_json(
                     {
                         "runs": runs,
