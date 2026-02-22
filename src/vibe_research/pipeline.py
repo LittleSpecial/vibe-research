@@ -29,6 +29,7 @@ class ResearchCycleRunner:
             base_url=provider["base_url"],
             model=model["model"],
             reasoning_effort=model.get("model_reasoning_effort", "high"),
+            max_output_tokens=int(model.get("max_output_tokens", 1400)),
         )
 
     def run_cycle(self, topic: str, dry_run: bool = False) -> Path:

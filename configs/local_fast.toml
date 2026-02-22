@@ -12,8 +12,8 @@ max_gpus = 8
 
 [model]
 model = "gpt-5.3-codex"
-model_reasoning_effort = "xhigh"
-max_output_tokens = 1400
+model_reasoning_effort = "low"
+max_output_tokens = 900
 model_provider = "codex-lb"
 personality = "pragmatic"
 
