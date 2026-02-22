@@ -21,11 +21,26 @@ RUN_DIR_LOCAL="$ROOT/runs/$RUN_ID"
 mkdir -p "$RUN_DIR_LOCAL"
 
 CMD="mkdir -p logs runs/${RUN_ID} && sbatch --gpus=${GPUS} --time=${HOURS}:00:00 remote/slurm_run_experiment.sh runs/${RUN_ID}"
-OUT="$("$ZX_SSH_SCRIPT" "$HOST" --repo "$REMOTE_REPO" "$CMD")"
+if ! OUT="$("$ZX_SSH_SCRIPT" "$HOST" --repo "$REMOTE_REPO" "$CMD" 2>&1)"; then
+  echo "$OUT" >&2
+  cat > "$RUN_DIR_LOCAL/remote_submit_error.json" <<EOF
+{
+  "host": "$HOST",
+  "remote_repo": "$REMOTE_REPO",
+  "run_id": "$RUN_ID",
+  "gpus": $GPUS,
+  "hours": $HOURS,
+  "error": $(printf '%s' "$OUT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))')
+}
+EOF
+  echo "Recorded remote_submit_error.json at $RUN_DIR_LOCAL/remote_submit_error.json" >&2
+  exit 1
+fi
 echo "$OUT"
 
 JOB_ID="$(echo "$OUT" | rg -o '[0-9]+' | tail -n 1 || true)"
 if [[ -n "$JOB_ID" ]]; then
+  rm -f "$RUN_DIR_LOCAL/remote_submit_error.json"
   cat > "$RUN_DIR_LOCAL/remote_submit.json" <<EOF
 {
   "host": "$HOST",
