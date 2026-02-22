@@ -1,6 +1,6 @@
 # vibe-research
 
-Minimal `idea -> plan -> implementation -> remote run` pipeline for RL + LLM research.
+Minimal `literature -> idea -> plan -> implementation -> remote run` pipeline for RL + LLM research.
 
 ## Design
 - Local (Mac): orchestration and model calls through `codex-lb` (`gpt-5.3-codex`).
@@ -15,6 +15,7 @@ Minimal `idea -> plan -> implementation -> remote run` pipeline for RL + LLM res
 - Real-time observability:
   - `runs/<RUN_ID>/status.json`
   - `runs/<RUN_ID>/progress.log`
+  - `runs/<RUN_ID>/literature/*` (paper retrieval + review)
 
 ## Quick Start
 ```bash
@@ -80,6 +81,14 @@ API budget notes:
 - Usage ledgers are written to:
   - `runs/<RUN_ID>/api_usage.json`
   - `runs/.budget/YYYY-MM-DD.json`
+
+Literature notes:
+- Every cycle starts with arXiv retrieval and a literature synthesis stage.
+- Retrieved metadata is stored in `runs/<RUN_ID>/literature/papers.json`.
+- Review synthesis is in `runs/<RUN_ID>/literature/review.md`.
+- PDFs are downloaded (configurable) and then synced to remote under:
+  - `~/zx/vibe-research/runs/<RUN_ID>/literature/pdfs/`
+  - local copies can be auto-deleted after successful sync.
 
 If `codex-lb` requires auth, set locally:
 ```bash

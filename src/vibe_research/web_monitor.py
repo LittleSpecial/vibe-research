@@ -818,6 +818,7 @@ INDEX_HTML = """<!doctype html>
         <div class="notice warn" id="gateNotice">No active feedback gate.</div>
         <label>Stage</label>
         <select id="stageSelect">
+          <option value="literature">literature</option>
           <option value="idea">idea</option>
           <option value="planning">planning</option>
           <option value="implementation">implementation</option>

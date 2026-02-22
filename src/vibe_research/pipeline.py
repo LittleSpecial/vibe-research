@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
 from .config import Settings
+from .literature import ArxivPaper, download_pdfs, papers_to_digest_markdown, save_papers_json, search_arxiv
 from .llm_client import ResponsesClient
 
 
@@ -54,7 +57,8 @@ class ResearchCycleRunner:
         (self.repo_root / "runs" / "LATEST_RUN").write_text(run_id, encoding="utf-8")
 
         self._write_feedback_templates(run_dir)
-        total_steps = 4 if agent_count > 1 else 3
+        literature_enabled = self._literature_enabled()
+        total_steps = (4 if agent_count > 1 else 3) + (1 if literature_enabled else 0)
         self._write_status(
             run_dir,
             run_id=run_id,
@@ -81,15 +85,54 @@ class ResearchCycleRunner:
             return run_dir
 
         try:
+            current_step = 0
+            literature_context = ""
+            literature_digest = ""
+            top_papers: list[ArxivPaper] = []
+            if literature_enabled:
+                literature_digest, top_papers = self._prepare_literature(topic=topic, run_dir=run_dir)
+                current_step += 1
+                self._write_status(
+                    run_dir,
+                    run_id=run_id,
+                    topic=topic,
+                    state="running",
+                    stage="literature",
+                    step=current_step,
+                    total_steps=total_steps,
+                    message="searching papers and synthesizing literature gaps",
+                )
+                literature_context = self._run_reviewable_stage(
+                    run_dir=run_dir,
+                    stage="literature",
+                    interactive=interactive,
+                    feedback_timeout=feedback_timeout,
+                    generator=lambda feedback_text: self._generate_literature_review(
+                        run_dir=run_dir,
+                        topic=topic,
+                        digest_markdown=literature_digest,
+                        max_gpu_hours=max_gpu_hours,
+                        max_gpus=max_gpus,
+                        feedback_text=feedback_text,
+                    ),
+                    output_path=run_dir / "literature" / "review.md",
+                )
+                self._maybe_archive_literature_pdfs(
+                    run_dir=run_dir,
+                    papers=top_papers,
+                    run_id=run_id,
+                )
+
             debate_notes: list[tuple[str, str]] = []
             if agent_count > 1:
+                current_step += 1
                 self._write_status(
                     run_dir,
                     run_id=run_id,
                     topic=topic,
                     state="running",
                     stage="ideation_agents",
-                    step=1,
+                    step=current_step,
                     total_steps=total_steps,
                     message="running multi-agent ideation debate",
                 )
@@ -99,16 +142,18 @@ class ResearchCycleRunner:
                     agent_count=agent_count,
                     max_gpu_hours=max_gpu_hours,
                     max_gpus=max_gpus,
+                    literature_context=literature_context,
                 )
                 self._append_progress(run_dir, f"generated {len(debate_notes)} agent notes")
 
+            current_step += 1
             self._write_status(
                 run_dir,
                 run_id=run_id,
                 topic=topic,
                 state="running",
                 stage="idea",
-                step=(2 if agent_count > 1 else 1),
+                step=current_step,
                 total_steps=total_steps,
                 message="generating synthesized idea",
             )
@@ -123,18 +168,20 @@ class ResearchCycleRunner:
                     debate_notes=debate_notes,
                     max_gpu_hours=max_gpu_hours,
                     max_gpus=max_gpus,
+                    literature_context=literature_context,
                     feedback_text=feedback_text,
                 ),
                 output_path=run_dir / "idea.md",
             )
 
+            current_step += 1
             self._write_status(
                 run_dir,
                 run_id=run_id,
                 topic=topic,
                 state="running",
                 stage="planning",
-                step=(3 if agent_count > 1 else 2),
+                step=current_step,
                 total_steps=total_steps,
                 message="building executable experiment plan",
             )
@@ -148,6 +195,7 @@ class ResearchCycleRunner:
                     idea_md=idea_md,
                     max_gpu_hours=max_gpu_hours,
                     max_gpus=max_gpus,
+                    literature_context=literature_context,
                     feedback_text=feedback_text,
                 ),
                 output_path=run_dir / "plan.raw.txt",
@@ -158,13 +206,14 @@ class ResearchCycleRunner:
                 json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8"
             )
 
+            current_step += 1
             self._write_status(
                 run_dir,
                 run_id=run_id,
                 topic=topic,
                 state="running",
                 stage="implementation",
-                step=total_steps,
+                step=current_step,
                 total_steps=total_steps,
                 message="generating runnable implementation",
             )
@@ -178,6 +227,7 @@ class ResearchCycleRunner:
                     plan=plan,
                     max_gpu_hours=max_gpu_hours,
                     max_gpus=max_gpus,
+                    literature_context=literature_context,
                     feedback_text=feedback_text,
                 ),
                 output_path=run_dir / "implementation.md",
@@ -228,6 +278,7 @@ class ResearchCycleRunner:
         agent_count: int,
         max_gpu_hours: float,
         max_gpus: int,
+        literature_context: str,
     ) -> list[tuple[str, str]]:
         roles = self._agent_roles()
         selected = roles[: max(1, min(agent_count, len(roles)))]
@@ -247,6 +298,11 @@ class ResearchCycleRunner:
                 f"Topic seed: {topic}\n"
                 f"Compute envelope: up to {max_gpus}xA100; max wall-clock {max_gpu_hours:.1f}h per run.\n"
             )
+            if literature_context.strip():
+                user_prompt += (
+                    "\nLiterature review context (mandatory; cite paper IDs when you claim novelty):\n"
+                    f"{literature_context}\n"
+                )
             if feedback_text:
                 user_prompt += f"\nExtra human feedback:\n{feedback_text}\n"
 
@@ -304,6 +360,7 @@ class ResearchCycleRunner:
         debate_notes: list[tuple[str, str]],
         max_gpu_hours: float,
         max_gpus: int,
+        literature_context: str,
         feedback_text: str,
     ) -> str:
         ideation_prompt = _read_prompt(self.repo_root / "prompts" / "ideation.md")
@@ -316,6 +373,11 @@ class ResearchCycleRunner:
         )
         if notes_blob:
             user_prompt += f"\nAgent discussion notes:\n{notes_blob}\n"
+        if literature_context.strip():
+            user_prompt += (
+                "\nLiterature review context (must use to avoid trivial/known ideas):\n"
+                f"{literature_context}\n"
+            )
         if feedback_text:
             user_prompt += f"\nHuman feedback for revision:\n{feedback_text}\n"
 
@@ -333,6 +395,7 @@ class ResearchCycleRunner:
         idea_md: str,
         max_gpu_hours: float,
         max_gpus: int,
+        literature_context: str,
         feedback_text: str,
     ) -> str:
         planning_prompt = _read_prompt(self.repo_root / "prompts" / "planning.md")
@@ -343,6 +406,11 @@ class ResearchCycleRunner:
             f"- Hardware: up to {max_gpus}xA100\n\n"
             f"Idea:\n{idea_md}"
         )
+        if literature_context.strip():
+            user_prompt += (
+                "\n\nLiterature novelty constraints:\n"
+                f"{literature_context}\n"
+            )
         if feedback_text:
             user_prompt += f"\n\nHuman feedback for revision:\n{feedback_text}\n"
 
@@ -358,6 +426,7 @@ class ResearchCycleRunner:
         plan: list[dict],
         max_gpu_hours: float,
         max_gpus: int,
+        literature_context: str,
         feedback_text: str,
     ) -> str:
         impl_prompt = _read_prompt(self.repo_root / "prompts" / "implementation.md")
@@ -370,6 +439,11 @@ class ResearchCycleRunner:
             f"- wall-clock <= {max_gpu_hours:.1f}h\n\n"
             f"Plan:\n{json.dumps(plan, ensure_ascii=False, indent=2)}"
         )
+        if literature_context.strip():
+            user_prompt += (
+                "\n\nContext from literature review:\n"
+                f"{literature_context}\n"
+            )
         if feedback_text:
             user_prompt += f"\n\nHuman feedback for revision:\n{feedback_text}\n"
 
@@ -378,6 +452,115 @@ class ResearchCycleRunner:
             system_prompt="Be concrete. Prefer short, executable outputs.",
             user_prompt=user_prompt,
         )
+
+    def _literature_enabled(self) -> bool:
+        return self._to_bool(self.settings.research.get("enable_literature_search", True))
+
+    def _prepare_literature(self, topic: str, run_dir: Path) -> tuple[str, list[ArxivPaper]]:
+        lit_dir = run_dir / "literature"
+        lit_dir.mkdir(parents=True, exist_ok=True)
+
+        max_results = int(self.settings.research.get("literature_max_results", 24))
+        top_k = int(self.settings.research.get("literature_top_k", 12))
+        papers = search_arxiv(topic=topic, max_results=max_results)
+        save_papers_json(papers, lit_dir / "papers.json")
+
+        digest = papers_to_digest_markdown(topic=topic, papers=papers, top_k=top_k)
+        (lit_dir / "digest.md").write_text(digest, encoding="utf-8")
+        self._append_progress(
+            run_dir,
+            f"literature search done: {len(papers)} papers retrieved (top_k={min(len(papers), top_k)})",
+        )
+        return digest, papers[: max(1, top_k)]
+
+    def _generate_literature_review(
+        self,
+        run_dir: Path,
+        topic: str,
+        digest_markdown: str,
+        max_gpu_hours: float,
+        max_gpus: int,
+        feedback_text: str,
+    ) -> str:
+        lit_prompt = _read_prompt(self.repo_root / "prompts" / "literature.md")
+        user_prompt = (
+            f"{lit_prompt}\n\n"
+            f"Topic seed: {topic}\n"
+            f"Compute envelope: up to {max_gpus}xA100; max wall-clock {max_gpu_hours:.1f}h per run.\n\n"
+            f"Retrieved papers digest:\n{digest_markdown}\n"
+        )
+        if feedback_text:
+            user_prompt += f"\nHuman feedback for revision:\n{feedback_text}\n"
+
+        return self._call_llm(
+            run_dir=run_dir,
+            system_prompt=(
+                "You are a strict top-conference scout. Produce non-trivial novelty gaps with explicit paper references."
+            ),
+            user_prompt=user_prompt,
+        )
+
+    def _maybe_archive_literature_pdfs(
+        self,
+        run_dir: Path,
+        papers: list[ArxivPaper],
+        run_id: str,
+    ) -> None:
+        if not self._to_bool(self.settings.research.get("literature_download_pdfs", True)):
+            return
+
+        lit_dir = run_dir / "literature"
+        pdf_dir = lit_dir / "pdfs"
+        max_pdf_count = int(self.settings.research.get("literature_pdf_count", 6))
+        downloaded = download_pdfs(
+            papers=papers,
+            out_dir=pdf_dir,
+            max_count=max_pdf_count,
+        )
+        if not downloaded:
+            self._append_progress(run_dir, "literature pdf archive skipped: no pdf downloaded")
+            return
+
+        self._append_progress(run_dir, f"literature pdf downloaded: {len(downloaded)} files")
+        if not self._to_bool(self.settings.research.get("literature_remote_archive", True)):
+            return
+
+        host = str(self.settings.remote.get("default_host", "")).strip()
+        remote_repo = str(self.settings.remote.get("remote_repo", "")).strip()
+        if not host or not remote_repo:
+            self._append_progress(run_dir, "literature remote archive skipped: remote host/repo not configured")
+            return
+
+        remote_rel = f"runs/{run_id}/literature/pdfs"
+        ok = self._sync_dir_to_remote(local_dir=pdf_dir, host=host, remote_repo=remote_repo, remote_rel=remote_rel)
+        if ok:
+            self._append_progress(run_dir, f"literature pdf archived to remote: {host}:~/zx/{remote_repo}/{remote_rel}")
+            if self._to_bool(self.settings.research.get("literature_delete_local_pdfs_after_sync", True)):
+                shutil.rmtree(pdf_dir, ignore_errors=True)
+                self._append_progress(run_dir, "literature local pdf removed after remote archive")
+        else:
+            self._append_progress(run_dir, "literature remote archive failed; kept local pdf cache")
+
+    def _sync_dir_to_remote(self, local_dir: Path, host: str, remote_repo: str, remote_rel: str) -> bool:
+        remote_prefix = f"{host}:~/zx/{remote_repo}/{remote_rel}/"
+        try:
+            subprocess.run(
+                ["ssh", host, f"mkdir -p ~/zx/{remote_repo}/{remote_rel}"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            cp = subprocess.run(
+                ["rsync", "-az", str(local_dir) + "/", remote_prefix],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        except Exception:
+            return False
+        return cp.returncode == 0
 
     def _run_reviewable_stage(
         self,
@@ -390,6 +573,7 @@ class ResearchCycleRunner:
     ) -> str:
         revision_feedback = self._collect_feedback(run_dir, stage)
         text = generator(revision_feedback)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(text, encoding="utf-8")
         self._append_progress(run_dir, f"stage completed: {stage}")
 
@@ -566,6 +750,15 @@ class ResearchCycleRunner:
         return self.repo_root / "runs" / ".budget" / f"{day}.json"
 
     @staticmethod
+    def _to_bool(value: object) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value != 0
+        s = str(value).strip().lower()
+        return s in {"1", "true", "yes", "y", "on"}
+
+    @staticmethod
     def _read_json_dict(path: Path) -> dict:
         if not path.exists():
             return {}
@@ -582,7 +775,7 @@ class ResearchCycleRunner:
             "Write feedback notes in this folder.\n\n"
             "Supported files:\n"
             "- global.md: applies to all following stages\n"
-            "- idea.md / planning.md / implementation.md: stage-specific feedback\n"
+            "- literature.md / ideation_agents.md / idea.md / planning.md / implementation.md: stage-specific feedback\n"
             "- <stage>.approve: continue stage\n"
             "- <stage>.revise: regenerate stage using <stage>.md content\n"
         )

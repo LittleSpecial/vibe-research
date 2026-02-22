@@ -5,6 +5,13 @@ max_gpus_per_run = 4
 max_api_usd_per_day = 0
 api_input_usd_per_1m_tokens = 0
 api_output_usd_per_1m_tokens = 0
+enable_literature_search = true
+literature_max_results = 16
+literature_top_k = 8
+literature_download_pdfs = true
+literature_pdf_count = 4
+literature_remote_archive = true
+literature_delete_local_pdfs_after_sync = true
 
 [remote]
 default_host = "zw1"
