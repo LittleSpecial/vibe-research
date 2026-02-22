@@ -13,6 +13,8 @@ ARGS=(
   --exclude 'runs/*/checkpoints'
   --exclude 'runs/*/logs'
   --exclude 'runs/*/artifacts'
+  # Keep remote-side literature PDF cache even when local cache is auto-removed.
+  --exclude 'runs/*/literature/pdfs'
 )
 
 rsync "${ARGS[@]}" "$ROOT/" "$HOST:~/zx/$REMOTE_REPO/"
