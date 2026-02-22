@@ -1,0 +1,24 @@
+[research]
+default_topic = "low-resource RL + LLM with public datasets"
+max_gpu_hours_per_run = 12
+max_api_usd_per_day = 0
+
+[remote]
+default_host = "zw1"
+remote_repo = "vibe-research"
+remote_root = "~/zx"
+default_gpus = 4
+max_gpus = 8
+
+[model]
+model = "gpt-5.3-codex"
+model_reasoning_effort = "xhigh"
+model_provider = "codex-lb"
+personality = "pragmatic"
+
+[model_providers.codex-lb]
+name = "OpenAI"
+base_url = "http://127.0.0.1:2455/backend-api/codex"
+chatgpt_base_url = "http://127.0.0.1:2455"
+wire_api = "responses"
+requires_openai_auth = true

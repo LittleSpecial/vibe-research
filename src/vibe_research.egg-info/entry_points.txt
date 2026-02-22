@@ -1,0 +1,2 @@
+[console_scripts]
+vibe-research = vibe_research.cli:main

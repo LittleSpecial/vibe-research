@@ -1,0 +1,13 @@
+README.md
+pyproject.toml
+src/vibe_research/__init__.py
+src/vibe_research/cli.py
+src/vibe_research/config.py
+src/vibe_research/execution.py
+src/vibe_research/llm_client.py
+src/vibe_research/pipeline.py
+src/vibe_research.egg-info/PKG-INFO
+src/vibe_research.egg-info/SOURCES.txt
+src/vibe_research.egg-info/dependency_links.txt
+src/vibe_research.egg-info/entry_points.txt
+src/vibe_research.egg-info/top_level.txt
