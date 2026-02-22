@@ -10,6 +10,6 @@ Output Markdown with these sections:
 7. Must-Have Experiments to Survive Review
 
 Hard requirements:
-- Cite paper IDs (`arXiv:...`) when making novelty/overlap claims.
+- Cite paper IDs in `source:id` form (for arXiv use `arXiv:...`) when making novelty/overlap claims.
 - Reject toy or trivial tasks. Prefer problems that can plausibly support top-tier publication.
 - Respect the compute envelope provided by the user.

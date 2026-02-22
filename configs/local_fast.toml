@@ -6,6 +6,7 @@ max_api_usd_per_day = 0
 api_input_usd_per_1m_tokens = 0
 api_output_usd_per_1m_tokens = 0
 enable_literature_search = true
+literature_sources = "arxiv,semantic_scholar"
 literature_max_results = 16
 literature_top_k = 8
 literature_download_pdfs = true

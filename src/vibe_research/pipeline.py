@@ -10,7 +10,13 @@ from pathlib import Path
 from typing import Callable
 
 from .config import Settings
-from .literature import ArxivPaper, download_pdfs, papers_to_digest_markdown, save_papers_json, search_arxiv
+from .literature import (
+    LiteraturePaper,
+    download_pdfs,
+    papers_to_digest_markdown,
+    save_papers_json,
+    search_literature,
+)
 from .llm_client import ResponsesClient
 
 
@@ -88,7 +94,7 @@ class ResearchCycleRunner:
             current_step = 0
             literature_context = ""
             literature_digest = ""
-            top_papers: list[ArxivPaper] = []
+            top_papers: list[LiteraturePaper] = []
             if literature_enabled:
                 literature_digest, top_papers = self._prepare_literature(topic=topic, run_dir=run_dir)
                 current_step += 1
@@ -456,20 +462,29 @@ class ResearchCycleRunner:
     def _literature_enabled(self) -> bool:
         return self._to_bool(self.settings.research.get("enable_literature_search", True))
 
-    def _prepare_literature(self, topic: str, run_dir: Path) -> tuple[str, list[ArxivPaper]]:
+    def _prepare_literature(self, topic: str, run_dir: Path) -> tuple[str, list[LiteraturePaper]]:
         lit_dir = run_dir / "literature"
         lit_dir.mkdir(parents=True, exist_ok=True)
 
         max_results = int(self.settings.research.get("literature_max_results", 24))
         top_k = int(self.settings.research.get("literature_top_k", 12))
-        papers = search_arxiv(topic=topic, max_results=max_results)
+        sources = self._literature_sources()
+        papers = search_literature(topic=topic, max_results=max_results, sources=sources)
         save_papers_json(papers, lit_dir / "papers.json")
 
         digest = papers_to_digest_markdown(topic=topic, papers=papers, top_k=top_k)
         (lit_dir / "digest.md").write_text(digest, encoding="utf-8")
+        source_counts: dict[str, int] = {}
+        for p in papers:
+            source_counts[p.source] = source_counts.get(p.source, 0) + 1
+        source_blob = ", ".join(f"{k}={v}" for k, v in sorted(source_counts.items())) or "none"
         self._append_progress(
             run_dir,
-            f"literature search done: {len(papers)} papers retrieved (top_k={min(len(papers), top_k)})",
+            (
+                "literature search done: "
+                f"{len(papers)} papers retrieved from [{source_blob}] "
+                f"(top_k={min(len(papers), top_k)})"
+            ),
         )
         return digest, papers[: max(1, top_k)]
 
@@ -503,7 +518,7 @@ class ResearchCycleRunner:
     def _maybe_archive_literature_pdfs(
         self,
         run_dir: Path,
-        papers: list[ArxivPaper],
+        papers: list[LiteraturePaper],
         run_id: str,
     ) -> None:
         if not self._to_bool(self.settings.research.get("literature_download_pdfs", True)):
@@ -748,6 +763,26 @@ class ResearchCycleRunner:
     def _daily_usage_path(self) -> Path:
         day = datetime.now().strftime("%Y-%m-%d")
         return self.repo_root / "runs" / ".budget" / f"{day}.json"
+
+    def _literature_sources(self) -> list[str]:
+        raw = self.settings.research.get("literature_sources", "arxiv")
+        items: list[str]
+        if isinstance(raw, (list, tuple)):
+            items = [str(x).strip().lower() for x in raw]
+        else:
+            items = [x.strip().lower() for x in str(raw).split(",")]
+        allowed = {"arxiv", "semantic_scholar", "semanticscholar", "openalex"}
+        out: list[str] = []
+        for x in items:
+            if not x:
+                continue
+            if x not in allowed:
+                continue
+            if x == "semanticscholar":
+                x = "semantic_scholar"
+            if x not in out:
+                out.append(x)
+        return out or ["arxiv"]
 
     @staticmethod
     def _to_bool(value: object) -> bool:

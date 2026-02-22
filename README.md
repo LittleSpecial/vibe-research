@@ -83,7 +83,8 @@ API budget notes:
   - `runs/.budget/YYYY-MM-DD.json`
 
 Literature notes:
-- Every cycle starts with arXiv retrieval and a literature synthesis stage.
+- Every cycle starts with a literature retrieval + synthesis stage.
+- Default retrieval sources: `arxiv`, `semantic_scholar` (optional: add `openalex` via `research.literature_sources`).
 - Retrieved metadata is stored in `runs/<RUN_ID>/literature/papers.json`.
 - Review synthesis is in `runs/<RUN_ID>/literature/review.md`.
 - PDFs are downloaded (configurable) and then synced to remote under:
