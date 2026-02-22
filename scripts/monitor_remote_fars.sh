@@ -18,7 +18,7 @@ fi
 ZX_SSH_SCRIPT="${ZX_SSH_SCRIPT:-$HOME/.codex/skills/paracloud-zx-ssh-workflow/scripts/ssh_zx.sh}"
 JOB_ID=""
 if [[ -f "runs/$RUN_ID/remote_submit.json" ]]; then
-  JOB_ID="$(python - <<PY
+  JOB_ID="$(python3 - <<PY
 import json
 from pathlib import Path
 p=Path('runs/$RUN_ID/remote_submit.json')
@@ -53,7 +53,7 @@ while true; do
 
   echo
   echo "--- remote run status ---"
-  "$ZX_SSH_SCRIPT" "$HOST" --repo "$REMOTE_REPO" "python - <<'PY'
+  "$ZX_SSH_SCRIPT" "$HOST" --repo "$REMOTE_REPO" "python3 - <<'PY'
 import json
 from pathlib import Path
 p=Path('runs/${RUN_ID}/status.json')
@@ -73,7 +73,7 @@ PY" || true
     "$ZX_SSH_SCRIPT" "$HOST" --repo "$REMOTE_REPO" "squeue -j $JOB_ID -o '%.18i %.9P %.20j %.8u %.2t %.10M %.10l %.6D %R' 2>/dev/null | sed -n '1,5p'" || true
     echo
     echo "--- slurm job detail ---"
-    "$ZX_SSH_SCRIPT" "$HOST" --repo "$REMOTE_REPO" "scontrol show job $JOB_ID 2>/dev/null | tr ' ' '\n' | rg 'JobState=|RunTime=|TimeLimit=|NumNodes=|NumCPUs=|GRES=|NodeList='" || true
+    "$ZX_SSH_SCRIPT" "$HOST" --repo "$REMOTE_REPO" "scontrol show job $JOB_ID 2>/dev/null | tr ' ' '\n' | grep -E 'JobState=|RunTime=|TimeLimit=|NumNodes=|NumCPUs=|GRES=|NodeList='" || true
   fi
 
   echo

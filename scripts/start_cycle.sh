@@ -14,16 +14,21 @@ TOPIC="${2:-}"
 MODE="${3:-interactive}"  # interactive|noninteractive
 AGENT_COUNT="${4:-0}"      # 0 => use config default
 TIMEOUT="${5:-0}"          # feedback timeout; 0 => wait forever
+if [[ "$MODE" != "interactive" ]] && [[ "$MODE" != "noninteractive" ]]; then
+  echo "Invalid MODE=$MODE (use interactive|noninteractive)" >&2
+  exit 2
+fi
 
 mkdir -p runs/.orchestrator_logs
 TS="$(date +%Y%m%d_%H%M%S)"
 LOG_PATH="runs/.orchestrator_logs/run_cycle_${TS}.log"
+ln -sfn "run_cycle_${TS}.log" runs/.orchestrator_logs/latest.log
 PREV_RUN_ID=""
 if [[ -f runs/LATEST_RUN ]]; then
   PREV_RUN_ID="$(cat runs/LATEST_RUN || true)"
 fi
 
-CMD=(vibe-research run-cycle --config "$CONFIG" --agent-count "$AGENT_COUNT" --feedback-timeout "$TIMEOUT")
+CMD=(.venv/bin/vibe-research run-cycle --config "$CONFIG" --agent-count "$AGENT_COUNT" --feedback-timeout "$TIMEOUT")
 if [[ -n "$TOPIC" ]]; then
   CMD+=(--topic "$TOPIC")
 fi
@@ -34,6 +39,13 @@ fi
 nohup "${CMD[@]}" >"$LOG_PATH" 2>&1 </dev/null &
 PID=$!
 echo "$PID" > runs/LATEST_PID
+sleep 1
+if ! ps -p "$PID" >/dev/null 2>&1; then
+  echo "run-cycle failed to start (pid=$PID is not alive)" >&2
+  echo "---- log tail ----" >&2
+  tail -n 80 "$LOG_PATH" >&2 || true
+  exit 1
+fi
 
 echo "Started run-cycle pid=$PID"
 echo "Log: $ROOT/$LOG_PATH"

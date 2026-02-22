@@ -7,7 +7,9 @@ Minimal `idea -> plan -> implementation -> remote run` pipeline for RL + LLM res
 - Remote (zw1): heavy training/evaluation only, under `~/zx/vibe-research`.
 - Budget guardrails:
   - `max_gpu_hours_per_run = 12` (wall-clock)
-  - max GPUs per job = `8` (default submission uses `4`)
+  - `max_gpus_per_run = 4` (clamped by `remote.max_gpus = 8`)
+  - optional API guardrail: set `max_api_usd_per_day > 0` and pricing keys
+    `api_input_usd_per_1m_tokens`, `api_output_usd_per_1m_tokens`
 - Multi-agent ideation:
   - default 4 agents: `pi_vision_agent` / `methodology_agent` / `experiment_engineer_agent` / `reviewer_redteam_agent`
 - Real-time observability:
@@ -71,6 +73,13 @@ During run, feedback files are under `runs/<RUN_ID>/feedback/`:
 Main config: `configs/local.toml`.
 
 Fast local iteration config: `configs/local_fast.toml`.
+
+API budget notes:
+- `max_api_usd_per_day = 0` means disabled.
+- If `max_api_usd_per_day > 0`, pricing keys must be configured.
+- Usage ledgers are written to:
+  - `runs/<RUN_ID>/api_usage.json`
+  - `runs/.budget/YYYY-MM-DD.json`
 
 If `codex-lb` requires auth, set locally:
 ```bash

@@ -5,6 +5,6 @@ Output two sections:
 
 Requirements:
 - The script must be practical and executable with minimal manual edits.
-- Respect hardware limit: up to 4xA100.
+- Respect hardware limit: up to configured A100 GPUs.
 - Save core metrics to JSON under runs/<RUN_ID>/results.json.
 - Include at least one strong baseline and one ablation in the run plan.

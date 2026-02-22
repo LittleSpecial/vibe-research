@@ -45,6 +45,8 @@ class ResearchCycleRunner:
         max_gpu_hours = float(self.settings.research.get("max_gpu_hours_per_run", 12))
         if max_gpu_hours <= 0:
             raise ValueError("max_gpu_hours_per_run must be > 0")
+        max_gpus = self._max_gpus_per_run()
+        self._validate_api_budget_config()
 
         run_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{_slug(topic)}"
         run_dir = self.repo_root / "runs" / run_id
@@ -96,6 +98,7 @@ class ResearchCycleRunner:
                     run_dir=run_dir,
                     agent_count=agent_count,
                     max_gpu_hours=max_gpu_hours,
+                    max_gpus=max_gpus,
                 )
                 self._append_progress(run_dir, f"generated {len(debate_notes)} agent notes")
 
@@ -115,9 +118,11 @@ class ResearchCycleRunner:
                 interactive=interactive,
                 feedback_timeout=feedback_timeout,
                 generator=lambda feedback_text: self._generate_idea(
+                    run_dir=run_dir,
                     topic=topic,
                     debate_notes=debate_notes,
                     max_gpu_hours=max_gpu_hours,
+                    max_gpus=max_gpus,
                     feedback_text=feedback_text,
                 ),
                 output_path=run_dir / "idea.md",
@@ -139,14 +144,16 @@ class ResearchCycleRunner:
                 interactive=interactive,
                 feedback_timeout=feedback_timeout,
                 generator=lambda feedback_text: self._generate_plan_raw(
+                    run_dir=run_dir,
                     idea_md=idea_md,
                     max_gpu_hours=max_gpu_hours,
+                    max_gpus=max_gpus,
                     feedback_text=feedback_text,
                 ),
                 output_path=run_dir / "plan.raw.txt",
             )
             plan = self._parse_plan(plan_raw)
-            self._validate_plan_budget(plan=plan, max_gpu_hours=max_gpu_hours)
+            self._validate_plan_budget(plan=plan, max_gpu_hours=max_gpu_hours, max_gpus=max_gpus)
             (run_dir / "plan.json").write_text(
                 json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8"
             )
@@ -167,8 +174,10 @@ class ResearchCycleRunner:
                 interactive=interactive,
                 feedback_timeout=feedback_timeout,
                 generator=lambda feedback_text: self._generate_implementation(
+                    run_dir=run_dir,
                     plan=plan,
                     max_gpu_hours=max_gpu_hours,
+                    max_gpus=max_gpus,
                     feedback_text=feedback_text,
                 ),
                 output_path=run_dir / "implementation.md",
@@ -179,7 +188,8 @@ class ResearchCycleRunner:
                 "run_id": run_id,
                 "topic": topic,
                 "max_gpu_hours_per_run": max_gpu_hours,
-                "max_gpu_cards_per_run": 4,
+                "max_gpu_cards_per_run": max_gpus,
+                "max_api_usd_per_day": float(self.settings.research.get("max_api_usd_per_day", 0)),
                 "status": "planned",
                 "created_at": datetime.now().isoformat(),
             }
@@ -217,6 +227,7 @@ class ResearchCycleRunner:
         run_dir: Path,
         agent_count: int,
         max_gpu_hours: float,
+        max_gpus: int,
     ) -> list[tuple[str, str]]:
         roles = self._agent_roles()
         selected = roles[: max(1, min(agent_count, len(roles)))]
@@ -234,12 +245,13 @@ class ResearchCycleRunner:
                 f"Role: {role_name}\n"
                 f"Role objective: {role_goal}\n"
                 f"Topic seed: {topic}\n"
-                f"Compute envelope: up to 4xA100; max wall-clock {max_gpu_hours:.1f}h per run.\n"
+                f"Compute envelope: up to {max_gpus}xA100; max wall-clock {max_gpu_hours:.1f}h per run.\n"
             )
             if feedback_text:
                 user_prompt += f"\nExtra human feedback:\n{feedback_text}\n"
 
-            note = self.client.complete(
+            note = self._call_llm(
+                run_dir=run_dir,
                 system_prompt="You are one specialized research agent in a multi-agent discussion.",
                 user_prompt=user_prompt,
             )
@@ -261,7 +273,7 @@ class ResearchCycleRunner:
             ),
             (
                 "experiment_engineer_agent",
-                "Build an execution-first plan with strong baselines/ablations that fits 4xA100 constraints.",
+                "Build an execution-first plan with strong baselines/ablations that fits the configured A100 constraints.",
             ),
             (
                 "reviewer_redteam_agent",
@@ -287,9 +299,11 @@ class ResearchCycleRunner:
 
     def _generate_idea(
         self,
+        run_dir: Path,
         topic: str,
         debate_notes: list[tuple[str, str]],
         max_gpu_hours: float,
+        max_gpus: int,
         feedback_text: str,
     ) -> str:
         ideation_prompt = _read_prompt(self.repo_root / "prompts" / "ideation.md")
@@ -297,7 +311,7 @@ class ResearchCycleRunner:
         user_prompt = (
             f"{ideation_prompt}\n\n"
             f"Topic seed: {topic}\n"
-            f"Compute envelope: up to 4xA100; max wall-clock {max_gpu_hours:.1f}h per run.\n"
+            f"Compute envelope: up to {max_gpus}xA100; max wall-clock {max_gpu_hours:.1f}h per run.\n"
             f"If using >1 GPU, mention the required parallel setup explicitly.\n"
         )
         if notes_blob:
@@ -305,45 +319,62 @@ class ResearchCycleRunner:
         if feedback_text:
             user_prompt += f"\nHuman feedback for revision:\n{feedback_text}\n"
 
-        return self.client.complete(
+        return self._call_llm(
+            run_dir=run_dir,
             system_prompt=(
                 "You are the lead research agent. Synthesize one strong RL/LLM idea with clear experiments."
             ),
             user_prompt=user_prompt,
         )
 
-    def _generate_plan_raw(self, idea_md: str, max_gpu_hours: float, feedback_text: str) -> str:
+    def _generate_plan_raw(
+        self,
+        run_dir: Path,
+        idea_md: str,
+        max_gpu_hours: float,
+        max_gpus: int,
+        feedback_text: str,
+    ) -> str:
         planning_prompt = _read_prompt(self.repo_root / "prompts" / "planning.md")
         user_prompt = (
             f"{planning_prompt}\n\n"
             f"Budget constraint:\n"
             f"- Max wall-clock per run: {max_gpu_hours:.1f}h\n"
-            f"- Hardware: up to 4xA100\n\n"
+            f"- Hardware: up to {max_gpus}xA100\n\n"
             f"Idea:\n{idea_md}"
         )
         if feedback_text:
             user_prompt += f"\n\nHuman feedback for revision:\n{feedback_text}\n"
 
-        return self.client.complete(
+        return self._call_llm(
+            run_dir=run_dir,
             system_prompt="Return valid JSON only. No markdown wrappers.",
             user_prompt=user_prompt,
         )
 
-    def _generate_implementation(self, plan: list[dict], max_gpu_hours: float, feedback_text: str) -> str:
+    def _generate_implementation(
+        self,
+        run_dir: Path,
+        plan: list[dict],
+        max_gpu_hours: float,
+        max_gpus: int,
+        feedback_text: str,
+    ) -> str:
         impl_prompt = _read_prompt(self.repo_root / "prompts" / "implementation.md")
         user_prompt = (
             f"{impl_prompt}\n\n"
             f"Runtime environment:\n"
             f"- Linux aarch64\n"
             f"- Slurm cluster\n"
-            f"- up to 4xA100\n"
+            f"- up to {max_gpus}xA100\n"
             f"- wall-clock <= {max_gpu_hours:.1f}h\n\n"
             f"Plan:\n{json.dumps(plan, ensure_ascii=False, indent=2)}"
         )
         if feedback_text:
             user_prompt += f"\n\nHuman feedback for revision:\n{feedback_text}\n"
 
-        return self.client.complete(
+        return self._call_llm(
+            run_dir=run_dir,
             system_prompt="Be concrete. Prefer short, executable outputs.",
             user_prompt=user_prompt,
         )
@@ -390,13 +421,159 @@ class ResearchCycleRunner:
         return parsed
 
     @staticmethod
-    def _validate_plan_budget(plan: list[dict], max_gpu_hours: float) -> None:
+    def _validate_plan_budget(plan: list[dict], max_gpu_hours: float, max_gpus: int) -> None:
         total_gpu = sum(float(x.get("est_gpu_hours", 0.0)) for x in plan)
-        if total_gpu > max_gpu_hours * 4:
+        budget = max_gpu_hours * max_gpus
+        if total_gpu > budget:
             raise RuntimeError(
                 "Plan exceeds total GPU-hours envelope: "
-                f"{total_gpu:.2f} > {max_gpu_hours * 4:.2f} (4xA100 * wall-clock budget)"
+                f"{total_gpu:.2f} > {budget:.2f} ({max_gpus}xA100 * wall-clock budget)"
             )
+
+    def _call_llm(self, run_dir: Path, system_prompt: str, user_prompt: str) -> str:
+        self._check_api_budget_before_call()
+        text = self.client.complete(system_prompt=system_prompt, user_prompt=user_prompt)
+        usage = self.client.last_usage
+        self._record_api_usage(run_dir=run_dir, usage=usage)
+        return text
+
+    def _max_gpus_per_run(self) -> int:
+        raw = self.settings.research.get(
+            "max_gpus_per_run",
+            self.settings.remote.get("default_gpus", 4),
+        )
+        try:
+            requested = int(raw)
+        except (TypeError, ValueError):
+            requested = 4
+        if requested <= 0:
+            raise ValueError("max_gpus_per_run must be > 0")
+
+        remote_cap_raw = self.settings.remote.get("max_gpus", requested)
+        try:
+            remote_cap = int(remote_cap_raw)
+        except (TypeError, ValueError):
+            remote_cap = requested
+        if remote_cap > 0:
+            return min(requested, remote_cap)
+        return requested
+
+    def _max_api_usd_per_day(self) -> float:
+        raw = self.settings.research.get("max_api_usd_per_day", 0)
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _api_pricing(self) -> tuple[float, float, float]:
+        def _f(name: str, default: float = 0.0) -> float:
+            raw = self.settings.research.get(name, default)
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                return default
+
+        input_rate = _f("api_input_usd_per_1m_tokens", 0.0)
+        output_rate = _f("api_output_usd_per_1m_tokens", 0.0)
+        cached_input_rate = _f("api_cached_input_usd_per_1m_tokens", input_rate)
+        return input_rate, output_rate, cached_input_rate
+
+    def _validate_api_budget_config(self) -> None:
+        limit = self._max_api_usd_per_day()
+        if limit <= 0:
+            return
+
+        input_rate, output_rate, cached_rate = self._api_pricing()
+        if input_rate <= 0 and output_rate <= 0 and cached_rate <= 0:
+            raise ValueError(
+                "max_api_usd_per_day > 0 but pricing is not configured. "
+                "Set research.api_input_usd_per_1m_tokens and api_output_usd_per_1m_tokens."
+            )
+
+    def _check_api_budget_before_call(self) -> None:
+        limit = self._max_api_usd_per_day()
+        if limit <= 0:
+            return
+
+        usage = self._load_daily_usage()
+        if float(usage.get("estimated_usd", 0.0)) >= limit:
+            raise RuntimeError(
+                f"API budget exhausted for today: {usage.get('estimated_usd', 0.0):.6f} >= {limit:.6f} USD"
+            )
+
+    def _record_api_usage(self, run_dir: Path, usage: dict[str, int]) -> None:
+        input_tokens = max(0, int(usage.get("input_tokens", 0)))
+        output_tokens = max(0, int(usage.get("output_tokens", 0)))
+        total_tokens = max(0, int(usage.get("total_tokens", input_tokens + output_tokens)))
+        cached_input_tokens = max(0, int(usage.get("cached_input_tokens", 0)))
+        billable_input_tokens = max(0, input_tokens - cached_input_tokens)
+
+        input_rate, output_rate, cached_rate = self._api_pricing()
+        estimated_usd = (
+            (billable_input_tokens / 1_000_000.0) * input_rate
+            + (cached_input_tokens / 1_000_000.0) * cached_rate
+            + (output_tokens / 1_000_000.0) * output_rate
+        )
+
+        run_usage_path = run_dir / "api_usage.json"
+        run_usage = self._read_json_dict(run_usage_path)
+        run_usage = {
+            "calls": int(run_usage.get("calls", 0)) + 1,
+            "input_tokens": int(run_usage.get("input_tokens", 0)) + input_tokens,
+            "cached_input_tokens": int(run_usage.get("cached_input_tokens", 0)) + cached_input_tokens,
+            "output_tokens": int(run_usage.get("output_tokens", 0)) + output_tokens,
+            "total_tokens": int(run_usage.get("total_tokens", 0)) + total_tokens,
+            "estimated_usd": float(run_usage.get("estimated_usd", 0.0)) + estimated_usd,
+            "updated_at": datetime.now().isoformat(),
+        }
+        run_usage_path.write_text(json.dumps(run_usage, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        daily_usage_path = self._daily_usage_path()
+        daily_usage = self._read_json_dict(daily_usage_path)
+        daily_usage = {
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "calls": int(daily_usage.get("calls", 0)) + 1,
+            "input_tokens": int(daily_usage.get("input_tokens", 0)) + input_tokens,
+            "cached_input_tokens": int(daily_usage.get("cached_input_tokens", 0)) + cached_input_tokens,
+            "output_tokens": int(daily_usage.get("output_tokens", 0)) + output_tokens,
+            "total_tokens": int(daily_usage.get("total_tokens", 0)) + total_tokens,
+            "estimated_usd": float(daily_usage.get("estimated_usd", 0.0)) + estimated_usd,
+            "updated_at": datetime.now().isoformat(),
+        }
+        daily_usage_path.parent.mkdir(parents=True, exist_ok=True)
+        daily_usage_path.write_text(json.dumps(daily_usage, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        self._append_progress(
+            run_dir,
+            (
+                "api usage updated: "
+                f"+in={input_tokens}, +out={output_tokens}, +cost=${estimated_usd:.6f}, "
+                f"daily=${daily_usage['estimated_usd']:.6f}"
+            ),
+        )
+
+        limit = self._max_api_usd_per_day()
+        if limit > 0 and float(daily_usage["estimated_usd"]) > limit:
+            raise RuntimeError(
+                f"API budget exceeded for today: {daily_usage['estimated_usd']:.6f} > {limit:.6f} USD"
+            )
+
+    def _load_daily_usage(self) -> dict:
+        return self._read_json_dict(self._daily_usage_path())
+
+    def _daily_usage_path(self) -> Path:
+        day = datetime.now().strftime("%Y-%m-%d")
+        return self.repo_root / "runs" / ".budget" / f"{day}.json"
+
+    @staticmethod
+    def _read_json_dict(path: Path) -> dict:
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return data if isinstance(data, dict) else {}
 
     def _write_feedback_templates(self, run_dir: Path) -> None:
         feedback_dir = run_dir / "feedback"

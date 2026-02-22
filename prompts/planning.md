@@ -9,5 +9,5 @@ Return STRICT JSON array where each element has:
 - priority ("high"|"medium"|"low")
 
 Budget constraints:
-- Hardware limit: up to 4xA100.
-- Total estimated GPU-hours across all items must fit 4 * wall-clock_budget_hours.
+- Hardware limit: up to configured A100 GPUs.
+- Total estimated GPU-hours across all items must fit (configured_gpu_limit * wall_clock_budget_hours).

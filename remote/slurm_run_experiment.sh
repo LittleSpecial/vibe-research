@@ -39,4 +39,4 @@ if [[ -f .venv/bin/activate ]]; then
   source .venv/bin/activate
 fi
 
-python -m vibe_research.cli run-experiment --run-dir "$RUN_DIR_REL"
+python3 -m vibe_research.cli run-experiment --run-dir "$RUN_DIR_REL"

@@ -11,7 +11,7 @@ fi
 ZX_SSH_SCRIPT="${ZX_SSH_SCRIPT:-$HOME/.codex/skills/paracloud-zx-ssh-workflow/scripts/ssh_zx.sh}"
 
 while true; do
-  "$ZX_SSH_SCRIPT" "$HOST" --repo "$REMOTE_REPO" "python - <<'PY'
+  "$ZX_SSH_SCRIPT" "$HOST" --repo "$REMOTE_REPO" "python3 - <<'PY'
 import json
 from pathlib import Path
 p=Path('runs/${RUN_ID}/status.json')

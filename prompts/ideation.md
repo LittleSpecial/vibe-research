@@ -3,7 +3,7 @@ Generate one strong, publication-oriented research idea.
 
 Hard constraints:
 - Direction must be reinforcement learning and/or large language models.
-- Must be executable on a single run using up to 4xA100 GPUs.
+- Must be executable on a single run within the configured A100 GPU limit.
 - Keep one run within the configured wall-clock budget.
 
 Guidelines:

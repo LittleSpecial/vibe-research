@@ -1,7 +1,10 @@
 [research]
-default_topic = "RL + LLM research that fits on 4xA100"
+default_topic = "RL + LLM research within the configured A100 budget"
 max_gpu_hours_per_run = 12
+max_gpus_per_run = 4
 max_api_usd_per_day = 0
+api_input_usd_per_1m_tokens = 0
+api_output_usd_per_1m_tokens = 0
 
 [remote]
 default_host = "zw1"
@@ -23,7 +26,7 @@ goal = "Design technically rigorous RL/LLM methods and identify key implementati
 
 [[agents.roles]]
 name = "experiment_engineer_agent"
-goal = "Build an execution-first plan with strong baselines/ablations that fits 4xA100 constraints."
+goal = "Build an execution-first plan with strong baselines/ablations that fits the configured A100 constraints."
 
 [[agents.roles]]
 name = "reviewer_redteam_agent"

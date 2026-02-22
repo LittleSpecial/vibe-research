@@ -38,7 +38,7 @@ EOF
 fi
 echo "$OUT"
 
-JOB_ID="$(echo "$OUT" | rg -o '[0-9]+' | tail -n 1 || true)"
+JOB_ID="$(echo "$OUT" | grep -Eo '[0-9]+' | tail -n 1 || true)"
 if [[ -n "$JOB_ID" ]]; then
   rm -f "$RUN_DIR_LOCAL/remote_submit_error.json"
   cat > "$RUN_DIR_LOCAL/remote_submit.json" <<EOF

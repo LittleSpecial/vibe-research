@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import os
-import urllib.request
 import urllib.error
+import urllib.request
+from typing import Any
 
 
 class ResponsesClient:
@@ -18,6 +19,8 @@ class ResponsesClient:
         self.model = model
         self.reasoning_effort = reasoning_effort
         self.max_output_tokens = max_output_tokens
+        self.last_usage: dict[str, int] = {}
+        self.last_response: dict[str, Any] = {}
 
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         payload = {
@@ -43,15 +46,33 @@ class ResponsesClient:
         req = urllib.request.Request(self.base_url, data=data, headers=headers, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=300) as resp:
-                text, raw_stream = self._read_sse_response(resp)
+                content_type = str(resp.headers.get("Content-Type", "")).lower()
+                if "text/event-stream" in content_type:
+                    text, response_payload, raw_stream = self._read_sse_response(resp)
+                else:
+                    raw_body = resp.read().decode("utf-8", errors="replace")
+                    try:
+                        response_payload = json.loads(raw_body or "{}")
+                    except json.JSONDecodeError:
+                        # Some proxies strip headers; attempt SSE parsing as fallback.
+                        response_payload = {}
+                        raw_stream = raw_body
+                        text = self._extract_stream_text(raw_stream)
+                    else:
+                        raw_stream = ""
+                        text = self._extract_text(response_payload)
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"LLM HTTP {e.code}: {detail}") from e
 
         if not text:
-            # Fallback for non-stream payloads.
-            parsed = json.loads(raw_stream or "{}")
-            text = self._extract_text(parsed)
+            if response_payload:
+                text = self._extract_text(response_payload)
+            if not text and raw_stream:
+                text = self._extract_stream_text(raw_stream)
+
+        self.last_response = response_payload if isinstance(response_payload, dict) else {}
+        self.last_usage = self._extract_usage(self.last_response)
         if not text:
             raise RuntimeError("No text found in response payload")
         return text
@@ -69,6 +90,34 @@ class ResponsesClient:
                     if t:
                         chunks.append(t)
         return "\n".join(chunks).strip()
+
+    @staticmethod
+    def _extract_usage(payload: dict) -> dict[str, int]:
+        usage = payload.get("usage", {})
+        if not isinstance(usage, dict):
+            return {}
+
+        def _to_int(key: str) -> int:
+            val = usage.get(key, 0)
+            if isinstance(val, bool):
+                return int(val)
+            if isinstance(val, (int, float)):
+                return int(val)
+            try:
+                return int(str(val))
+            except (TypeError, ValueError):
+                return 0
+
+        out = {
+            "input_tokens": _to_int("input_tokens"),
+            "output_tokens": _to_int("output_tokens"),
+            "total_tokens": _to_int("total_tokens"),
+            "cached_input_tokens": _to_int("cached_input_tokens"),
+        }
+        # Some providers omit total_tokens.
+        if out["total_tokens"] <= 0:
+            out["total_tokens"] = out["input_tokens"] + out["output_tokens"]
+        return out
 
     @staticmethod
     def _extract_stream_text(body: str) -> str:
@@ -101,13 +150,14 @@ class ResponsesClient:
         return "".join(chunks).strip()
 
     @staticmethod
-    def _read_sse_response(resp) -> tuple[str, str]:
+    def _read_sse_response(resp) -> tuple[str, dict[str, Any], str]:
         """
         Consume SSE lines until response.completed (or EOF).
-        Returns: (concatenated_text, raw_stream_text)
+        Returns: (concatenated_text, response_payload, raw_stream_text)
         """
         chunks: list[str] = []
         raw_lines: list[str] = []
+        response_payload: dict[str, Any] = {}
 
         while True:
             line_b = resp.readline()
@@ -137,6 +187,16 @@ class ResponsesClient:
                 if done_text:
                     chunks.append(done_text)
             elif typ == "response.completed":
+                maybe_response = event.get("response")
+                if isinstance(maybe_response, dict):
+                    response_payload = maybe_response
                 break
+            elif typ == "response":
+                maybe_response = event.get("response")
+                if isinstance(maybe_response, dict):
+                    response_payload = maybe_response
 
-        return "".join(chunks).strip(), "\n".join(raw_lines)
+        text = "".join(chunks).strip()
+        if not text and response_payload:
+            text = ResponsesClient._extract_text(response_payload)
+        return text, response_payload, "\n".join(raw_lines)

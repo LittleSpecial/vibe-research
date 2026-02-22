@@ -198,7 +198,7 @@ def _remote_probe(
     base = [str(ssh_script), host, "--repo", remote_repo]
 
     status_cmd = (
-        "python - <<'PY'\n"
+        "python3 - <<'PY'\n"
         "import json\n"
         "from pathlib import Path\n"
         f"p=Path('runs/{run_id}/status.json')\n"
@@ -241,7 +241,7 @@ def _remote_probe(
                 (
                     "scontrol show job "
                     f"{job_id} 2>/dev/null | tr ' ' '\\n' "
-                    "| rg 'JobState=|RunTime=|TimeLimit=|NumNodes=|NumCPUs=|GRES=|NodeList='"
+                    "| grep -E 'JobState=|RunTime=|TimeLimit=|NumNodes=|NumCPUs=|GRES=|NodeList='"
                 )
             ],
             timeout=20,
