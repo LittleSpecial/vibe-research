@@ -1,5 +1,5 @@
 [research]
-default_topic = "low-resource RL + LLM with public datasets"
+default_topic = "RL + LLM research that fits on 4xA100"
 max_gpu_hours_per_run = 12
 max_api_usd_per_day = 0
 

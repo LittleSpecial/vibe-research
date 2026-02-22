@@ -5,7 +5,9 @@ Return STRICT JSON array where each element has:
 - goal (string)
 - commands (array of shell commands)
 - expected_output (string)
-- est_gpu_hours (number)
+- est_gpu_hours (number, TOTAL gpu-hours for that item)
 - priority ("high"|"medium"|"low")
 
-Keep total estimated GPU hours <= 12.
+Budget constraints:
+- Hardware limit: up to 4xA100.
+- Total estimated GPU-hours across all items must fit 4 * wall-clock_budget_hours.
