@@ -73,6 +73,7 @@ class ResearchCycleRunner:
             user_prompt=f"{impl_prompt}\n\nPlan:\n{json.dumps(plan, ensure_ascii=False, indent=2)}",
         )
         (run_dir / "implementation.md").write_text(impl_doc, encoding="utf-8")
+        self._materialize_experiment_script(run_dir=run_dir, implementation_doc=impl_doc)
 
         meta = {
             "run_id": run_id,
@@ -85,3 +86,20 @@ class ResearchCycleRunner:
             json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         return run_dir
+
+    @staticmethod
+    def _materialize_experiment_script(run_dir: Path, implementation_doc: str) -> None:
+        m = re.search(r"```bash\s*(.*?)```", implementation_doc, flags=re.DOTALL | re.IGNORECASE)
+        if m:
+            body = m.group(1).strip()
+            script = f"#!/usr/bin/env bash\nset -euo pipefail\n\n{body}\n"
+        else:
+            script = (
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n\n"
+                "echo 'No bash block found in implementation.md. Please fill this script manually.'\n"
+                "exit 1\n"
+            )
+        out = run_dir / "experiment.sh"
+        out.write_text(script, encoding="utf-8")
+        out.chmod(0o755)
