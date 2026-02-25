@@ -54,6 +54,47 @@ RUN_ID=$(cat runs/LATEST_RUN)
 ./scripts/tail_remote_logs.sh zw1 vibe-research
 ```
 
+## IRIS v4.2 Run (Partial-ID under Evaluator Shift)
+Generate a runnable IRIS experiment (`runs/<RUN_ID>/experiment.sh`), then sync and submit.
+
+```bash
+cd /Users/zhaoxu/Developer/projects/vibe-research
+source .venv/bin/activate
+
+# 1) Materialize smoke run
+RUN_ID=$(./scripts/create_iris_run.sh smoke iris-v42-partial-id)
+echo "$RUN_ID"
+
+# 2) Local smoke (fast)
+python -m vibe_research.cli run-experiment --run-dir "runs/$RUN_ID"
+
+# 3) Sync + remote smoke submit (1 GPU, 1h)
+./scripts/sync_to_zw1.sh zw1 vibe-research
+./scripts/remote_bootstrap.sh zw1 vibe-research
+./scripts/submit_remote.sh zw1 vibe-research "$RUN_ID" 1 1
+
+# 4) After smoke success: materialize and submit formal run (4 GPU, 12h)
+# formal defaults to real rollout backend: local_hf + Qwen2.5-1.5B-Instruct
+RUN_ID_FORMAL=$(./scripts/create_iris_run.sh formal iris-v42-partial-id)
+./scripts/sync_to_zw1.sh zw1 vibe-research
+./scripts/submit_remote.sh zw1 vibe-research "$RUN_ID_FORMAL" 4 12
+
+# If local_hf CUDA is unavailable on cluster, force automatic fallback:
+./scripts/submit_remote.sh zw1 vibe-research "$RUN_ID_FORMAL" 4 12 \
+  "LOCAL_HF_FALLBACK_TO_SYNTHETIC=1"
+```
+
+Detailed protocol and monitoring checklist:
+- `docs/IRIS_V42_RUNBOOK.md`
+
+Remote bootstrap now follows cluster module setup (Paracloud aarch64):
+- `module purge`
+- auto-pick available CUDA module (`compilers/cuda/*` preferred)
+- auto-pick GCC module (`compilers/gcc/*`)
+- optional python module (falls back to current PATH python)
+- export `CUDA_HOME` from `nvcc` path
+- create/refresh `.venv` and install `requirements.txt` + editable package
+
 ## Web Monitor
 - Start: `./scripts/start_monitor_web.sh 8787 127.0.0.1 zw1 vibe-research`
 - URL: `http://127.0.0.1:8787`

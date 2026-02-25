@@ -18,25 +18,37 @@ if [[ -z "$RUN_DIR_REL" ]]; then
   exit 2
 fi
 
-if ! command -v module >/dev/null 2>&1; then
-  source /etc/profile || true
-  source /etc/profile.d/modules.sh || true
+CLUSTER_ENV_SH=""
+if [[ -n "${SLURM_SUBMIT_DIR:-}" && -f "${SLURM_SUBMIT_DIR}/remote/cluster_env.sh" ]]; then
+  CLUSTER_ENV_SH="${SLURM_SUBMIT_DIR}/remote/cluster_env.sh"
+else
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [[ -f "${SCRIPT_DIR}/cluster_env.sh" ]]; then
+    CLUSTER_ENV_SH="${SCRIPT_DIR}/cluster_env.sh"
+  fi
 fi
 
-module purge || true
-module load cuda/12.2 || true
-module load gcc/11 || true
-module load python/3.10 || true
-
-arch="$(uname -m)"
-if [[ "$arch" != "aarch64" ]]; then
-  echo "Unexpected architecture: $arch (expected aarch64)" >&2
+if [[ -z "${CLUSTER_ENV_SH}" ]]; then
+  echo "[ERR] Cannot locate remote/cluster_env.sh" >&2
   exit 2
 fi
 
+# shellcheck disable=SC1090
+source "${CLUSTER_ENV_SH}"
+setup_cluster_env
+
 mkdir -p logs
-if [[ -f .venv/bin/activate ]]; then
-  source .venv/bin/activate
+if [[ ! -f .venv/bin/activate ]]; then
+  echo "[ERR] missing .venv. Run scripts/remote_bootstrap.sh before submitting jobs." >&2
+  exit 2
+fi
+# shellcheck disable=SC1091
+source .venv/bin/activate
+
+EXP_SH="$RUN_DIR_REL/experiment.sh"
+if [[ ! -f "$EXP_SH" ]]; then
+  echo "[ERR] missing experiment script: $EXP_SH" >&2
+  exit 2
 fi
 
-python3 -m vibe_research.cli run-experiment --run-dir "$RUN_DIR_REL"
+bash "$EXP_SH"

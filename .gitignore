@@ -9,6 +9,9 @@ runs/
 projects/
 logs/
 *.log
+data/
+checkpoints/
+configs/judges.yaml
 
 # OS/editor
 .DS_Store
